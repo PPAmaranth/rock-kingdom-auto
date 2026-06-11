@@ -40,3 +40,9 @@ lkwg/
 # Interception driver (keep DLL, ignore installer artifacts)
 interception_driver/
 interception.zip
+
+# PyInstaller
+*.spec
+
+# Temp files
+query

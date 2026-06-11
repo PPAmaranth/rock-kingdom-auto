@@ -1,3 +1,4 @@
+import ctypes
 import random
 import time
 
@@ -5,6 +6,7 @@ from qfluentwidgets import FluentIcon
 
 from ok import Logger, TriggerTask
 from src.task.BaseRKTask import BaseRKTask
+from src.interception import InterceptionController
 
 logger = Logger.get_logger(__name__)
 
@@ -12,23 +14,27 @@ logger = Logger.get_logger(__name__)
 class AutoThrowTask(BaseRKTask, TriggerTask):
     """自动丢球捕捉任务。
 
-    功能：
-    - 以随机间隔 (0.3~1.0 秒) 向屏幕中央丢出精灵球
-    - 每连续工作 2~3 分钟后，休息 8~15 秒（模拟人类行为）
-    - 作为 TriggerTask，勾选即开启，取消即停止
+    使用 Interception 内核驱动绕过 ACE 反作弊。
+    每次 run() 执行一个动作后返回，由 ok-script 框架控制循环。
 
-    进阶 TODO：
-    - 精灵识别 + 视角对准 (YOLO)
-    - 捕捉模式检测（道具模式 vs 精灵模式）
-    - 高级球数量检测 + 自动补货
+    功能：
+    - 启动后 5 秒倒计时，期间不检测前台
+    - 倒计时结束后，游戏不在前台则自动停止
+    - 以随机间隔向屏幕中央丢球
+    - 连续工作后休息（模拟人类行为）
+    - 每 N 次丢球按 E 确保球模式
     """
+
+    _STATE_STARTUP = 'startup'
+    _STATE_THROW = 'throw'
+    _STATE_REST = 'rest'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name = "Auto Throw"
         self.group_name = "Capture"
         self.group_icon = FluentIcon.GAME
-        self.description = "自动向前方丢球捕捉精灵（MVP: 固定向屏幕中央丢球）"
+        self.description = "自动丢球捕捉（启动5秒倒计时，丢失焦点自动停止）"
         self.icon = FluentIcon.CALORIES
         self.trigger_interval = 0.1
 
@@ -55,72 +61,240 @@ class AutoThrowTask(BaseRKTask, TriggerTask):
             'Rest Duration Max (s)': '休息的最长时间',
         }
 
-        # ========== 运行状态 ==========
+        # ========== Interception 驱动 ==========
+        self._interception = None
+        self._game_hwnd = None
+        self._interception_ix = 0
+        self._interception_iy = 0
+
+        # ========== 模式控制 ==========
+        self._ball_mode_every_n = 3
+
+        # ========== 运行时状态 ==========
+        self._initialized = False
+        self._state = self._STATE_STARTUP
+        self._startup_deadline = 0       # 倒计时结束时间
+        self._next_throw_time = 0
+        self._rest_end_time = 0
+        self._work_start_time = 0
+        self._work_duration = 0
         self.throw_count = 0
         self.total_throws = 0
         self.session_start = 0
 
+    # ================================================================
+    # run() — 每次返回一个动作
+    # ================================================================
+
     def run(self):
-        """自动丢球主循环。"""
+        if not self._initialized:
+            self._on_first_run()
+
+        if not self.enabled:
+            self.log_info('[停止] 任务已禁用')
+            self.update_info()
+            return None
+
+        if self._state == self._STATE_STARTUP:
+            return self._tick_startup()
+        elif self._state == self._STATE_REST:
+            return self._tick_rest()
+        else:
+            return self._tick_throw()
+
+    # ================================================================
+    # 各状态
+    # ================================================================
+
+    def _on_first_run(self):
+        self._initialized = True
+        self._init_interception()
         self.throw_count = 0
         self.session_start = time.time()
+        self._work_duration = self._random_work_duration()
+        self._next_throw_time = 0
 
-        work_duration = self._random_work_duration()
-        work_start = time.time()
-        self.log_info(f'[开始] 自动丢球启动 | 本轮工作 {work_duration / 60:.1f} 分钟')
+        # 5 秒启动倒计时
+        self._state = self._STATE_STARTUP
+        self._startup_deadline = time.time() + 5
 
-        while True:
-            # ---- 检查是否需要休息 ----
-            elapsed = time.time() - work_start
-            if elapsed >= work_duration:
-                rest = self._random_rest_duration()
-                self.log_info(f'[休息] 已连续工作 {elapsed / 60:.1f} 分钟，休息 {rest:.1f} 秒')
+        self.log_info('[启动] 5 秒倒计时开始，请切换到游戏窗口...')
 
-                # 更新 GUI 计数信息
-                self.update_info()
+    def _tick_startup(self):
+        """启动倒计时：不检测前台，5 秒后切换到丢球状态。"""
+        remaining = self._startup_deadline - time.time()
+        if remaining > 0:
+            if remaining < 2:
+                self.log_info(f'[启动] {remaining:.0f} 秒后开始丢球...')
+            return None  # 继续等待
 
-                self.sleep(rest)
+        # 倒计时结束
+        self._state = self._STATE_THROW
+        self._work_start_time = time.time()
+        self._next_throw_time = 0
+        self.log_info(
+            f'[开始] 自动丢球启动 | 本轮工作 {self._work_duration / 60:.1f} 分钟 | '
+            f'丢失焦点自动停止'
+        )
+        self._ensure_ball_mode()
+        return True
 
-                # 开始新一轮工作
-                work_duration = self._random_work_duration()
-                work_start = time.time()
-                self.throw_count = 0
-                self.log_info(f'[继续] 新一轮工作 {work_duration / 60:.1f} 分钟')
+    def _tick_throw(self):
+        now = time.time()
 
-            # ---- 丢球 ----
-            interval = self._random_throw_interval()
-            self.sleep(interval)
-            self._do_throw()
+        # ---- 后台检测：不在前台就自动停止 ----
+        if not self._is_game_foreground():
+            self.log_info('[停止] 游戏窗口丢失焦点，自动停止')
+            self.disable()
+            self.update_info()
+            return None
 
-    def _do_throw(self):
-        """执行一次丢球操作：长按鼠标左键 → 松开。
+        # ---- 检查休息 ----
+        if now - self._work_start_time >= self._work_duration:
+            self._enter_rest()
+            return True
 
-        当前使用 ok-script 框架的标准 click() 方法。
-        ⚠️  注意：游戏使用 ACE (AntiCheatExpert) 内核反作弊，
-        所有软件模拟输入（PostMessage/SendInput/pynput）均被拦截。
-        当前实现在游戏中无法生效，需等待硬件方案（Arduino USB HID）。
-        """
+        # ---- 还没到丢球时间 ----
+        if now < self._next_throw_time:
+            return None
+
+        # ---- 丢球 ----
+        self._do_throw_once()
+        self._next_throw_time = now + self._random_throw_interval()
+        return True
+
+    def _tick_rest(self):
+        if time.time() < self._rest_end_time:
+            return None
+
+        # 休息结束
+        self._state = self._STATE_THROW
+        self._work_duration = self._random_work_duration()
+        self._work_start_time = time.time()
+        self.throw_count = 0
+        self._next_throw_time = 0
+        self.log_info(f'[继续] 新一轮工作 {self._work_duration / 60:.1f} 分钟')
+        self._ensure_ball_mode()
+        return True
+
+    def _enter_rest(self):
+        rest = self._random_rest_duration()
+        elapsed = time.time() - self._work_start_time
+        self.log_info(f'[休息] 已连续工作 {elapsed / 60:.1f} 分钟，休息 {rest:.1f} 秒')
+        self.update_info()
+        self._state = self._STATE_REST
+        self._rest_end_time = time.time() + rest
+
+    # ================================================================
+    # 单次丢球
+    # ================================================================
+
+    def _do_throw_once(self):
         hold_time = self._random_hold_time()
 
-        # 屏幕中央坐标（相对坐标 0.0~1.0）
-        x = self.width_of_screen(0.5)
-        y = self.height_of_screen(0.5)
+        if not self._interception:
+            x = self.width_of_screen(0.5)
+            y = self.height_of_screen(0.5)
+            self.click(x=x, y=y, down_time=hold_time)
+            self.throw_count += 1
+            self.total_throws += 1
+            return
 
-        self.click(x=x, y=y, down_time=hold_time)
+        # E 键球模式
+        if self.throw_count % self._ball_mode_every_n == 0 and self.throw_count > 0:
+            self._ensure_ball_mode()
+
+        # 刷新坐标
+        if self.throw_count % 100 == 0:
+            self._refresh_interception_coords()
+
+        # 点击前最后确认
+        if not self._is_game_foreground():
+            return
+
+        success = self._interception.click(
+            self._interception_ix, self._interception_iy,
+            hold_time=hold_time,
+        )
+        if not success:
+            self.log_error('[Interception] 点击失败，重新初始化')
+            self._interception.destroy()
+            self._interception = None
+            self._init_interception()
+            return
 
         self.throw_count += 1
         self.total_throws += 1
 
-        # 周期性地输出日志（每 50 次或每 30 秒）
         if self.throw_count % 50 == 0:
             self.log_info(
                 f'[丢球] 本轮 {self.throw_count} 次 | '
                 f'总计 {self.total_throws} 次 | '
-                f'间隔 {hold_time:.2f}s'
+                f'按住 {hold_time:.2f}s'
             )
 
+    # ================================================================
+    # Interception
+    # ================================================================
+
+    def _init_interception(self):
+        if self._interception is not None:
+            return
+        self._interception = InterceptionController()
+        if not self._interception.initialize():
+            self.log_error('[Interception] 驱动初始化失败')
+            self._interception = None
+            return
+        self.log_info(
+            f'[Interception] 已加载 '
+            f'(mice={self._interception.mouse_count}, '
+            f'kb={self._interception.keyboard_count})'
+        )
+        hwnd, proc, pid = self._interception.find_game_window()
+        if hwnd:
+            self._game_hwnd = hwnd
+            sx, sy, ix, iy, sw, sh = \
+                self._interception.client_center_to_interception(hwnd)
+            self._interception_ix = ix
+            self._interception_iy = iy
+            self.log_info(
+                f'[Interception] 游戏: HWND=0x{hwnd:X} '
+                f'PID={pid} 中心=({sx},{sy})'
+            )
+        else:
+            self.log_error('[Interception] 未找到游戏窗口')
+
+    def _refresh_interception_coords(self):
+        if not self._interception or not self._game_hwnd:
+            return
+        try:
+            _, _, ix, iy, _, _ = \
+                self._interception.client_center_to_interception(self._game_hwnd)
+            self._interception_ix = ix
+            self._interception_iy = iy
+        except Exception:
+            pass
+
+    # ================================================================
+    # 工具
+    # ================================================================
+
+    def _is_game_foreground(self):
+        if not self._game_hwnd:
+            return False
+        try:
+            return ctypes.windll.user32.GetForegroundWindow() == self._game_hwnd
+        except Exception:
+            return False
+
+    def _ensure_ball_mode(self):
+        if not self._interception or not self._is_game_foreground():
+            return
+        self.log_info('[模式] 按下 E 切换到球模式')
+        self._interception.press_key('E', hold_time=0.08)
+        time.sleep(0.15)
+
     def update_info(self):
-        """更新 GUI 面板信息。"""
         elapsed = time.time() - self.session_start
         rate = self.total_throws / max(elapsed, 1) * 3600
         self.info_set('本轮丢球', f'{self.throw_count} 次')
@@ -128,32 +302,33 @@ class AutoThrowTask(BaseRKTask, TriggerTask):
         self.info_set('丢球速率', f'{rate:.0f} 次/小时')
         self.info_set('运行时长', f'{elapsed / 60:.1f} 分钟')
 
-    # ========== 随机参数生成 ==========
+    # ================================================================
+    # 随机参数
+    # ================================================================
 
     def _random_throw_interval(self):
-        """随机丢球间隔 (秒)。"""
-        min_val = self.get_config('Throw Interval Min (s)')
-        max_val = self.get_config('Throw Interval Max (s)')
-        return random.uniform(min_val, max_val)
+        return random.uniform(
+            self.get_config('Throw Interval Min (s)'),
+            self.get_config('Throw Interval Max (s)'),
+        )
 
     def _random_hold_time(self):
-        """随机长按时间 (秒)。"""
-        min_val = self.get_config('Hold Time Min (s)')
-        max_val = self.get_config('Hold Time Max (s)')
-        return random.uniform(min_val, max_val)
+        return random.uniform(
+            self.get_config('Hold Time Min (s)'),
+            self.get_config('Hold Time Max (s)'),
+        )
 
     def _random_work_duration(self):
-        """随机连续工作时间 (秒)。"""
-        min_val = self.get_config('Work Duration Min (min)')
-        max_val = self.get_config('Work Duration Max (min)')
-        return random.uniform(min_val, max_val) * 60
+        return random.uniform(
+            self.get_config('Work Duration Min (min)'),
+            self.get_config('Work Duration Max (min)'),
+        ) * 60
 
     def _random_rest_duration(self):
-        """随机休息时间 (秒)。"""
-        min_val = self.get_config('Rest Duration Min (s)')
-        max_val = self.get_config('Rest Duration Max (s)')
-        return random.uniform(min_val, max_val)
+        return random.uniform(
+            self.get_config('Rest Duration Min (s)'),
+            self.get_config('Rest Duration Max (s)'),
+        )
 
     def get_config(self, key):
-        """获取配置值，带默认值回退。"""
         return self.config.get(key, self.default_config.get(key, 0))
