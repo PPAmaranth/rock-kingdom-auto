@@ -34,3 +34,9 @@ configs/
 # ok-script runtime
 .ok_files/
 ok-wuthering-waves/
+Rocokingdom-AutoCoin/
+lkwg/
+
+# Interception driver (keep DLL, ignore installer artifacts)
+interception_driver/
+interception.zip

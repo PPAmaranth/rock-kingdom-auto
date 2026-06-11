@@ -109,7 +109,9 @@ ok-script BaseTask
 | 2026-06-11 | 确认游戏引擎为 Unreal Engine（非 Unity） | PowerShell 脚本确认窗口类名 `UnrealWindow`，进程名 `NRC-Win64-Shipping.exe` |
 | 2026-06-11 | 确认游戏反作弊为 ACE (AntiCheatExpert) | 内核级反作弊，ring0 层拦截所有软件模拟输入 |
 | 2026-06-11 | 12 轮输入方案测试全部失败 | PostMessage / SendInput / mouse_event / keybd_event / pynput / PyDirect / G HUB 均被 ACE 拦截 |
-| 2026-06-11 | 后续方案：Arduino USB HID 硬件模拟 | 软件输入已穷尽，唯一可靠方案是用 Arduino 模拟真实 USB 鼠标
+| 2026-06-11 | 后续方案：Arduino USB HID 硬件模拟 | 软件输入已穷尽，唯一可靠方案是用 Arduino 模拟真实 USB 鼠标 |
+| 2026-06-11 | 发现 Interception 内核驱动方案（来自 lkwg 项目） | Interception 在 HID 驱动层（ring0）注入事件，比 ACE hook 层级更深，ACE 无法拦截 |
+| 2026-06-11 | 最终方案：Interception 内核驱动 | 已安装驱动（install-interception.exe），等待重启后测试。优于 Arduino——纯软件实现，效果等同于硬件 |
 
 ---
 
@@ -127,8 +129,11 @@ ok-script BaseTask
 | 批量 SendInput + dwExtraInfo | ✅ | ❌ | 均返回成功但游戏无响应 |
 | G HUB Lua 脚本 | — | — | 当前鼠标不支持 G 系列脚本功能 |
 | Touch Injection API | — | — | 结构复杂且需要触屏硬件 |
+| G HUB Lua 脚本 | — | — | 当前鼠标不支持 G 系列脚本功能 |
+| Rocokingdom-AutoCoin 方式 (pydirectinput 直调) | ✅ | ❌ | ACE 已更新，4月可用但6月已被拦截 |
+| **Interception 内核驱动** | **待测试** | **待测试** | **HID 驱动层注入，理论上 ACE 无法拦截** |
 
-**结论**：软件模拟输入已穷尽。唯一可行方案是 **Arduino USB HID 硬件模拟**（Python 串口 → Arduino → USB HID 鼠标事件），游戏完全无法检测。
+**结论**：Win32 API 级别的模拟输入已穷尽。最后方案是 **Interception 内核驱动**（参考 lkwg 项目），在 HID 驱动层注入事件。驱动已安装，等待重启后测试。
 
 ---
 
