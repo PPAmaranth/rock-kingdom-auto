@@ -20,16 +20,15 @@ key_config_option = ConfigOption('Game Hotkey', {
 }, description='In Game Hotkey for Skills', show_at_tab=True, icon=FluentIcon.GAME)
 
 # ============================================================
-# TODO: 后续补充 — 游戏窗口类名确认
-# Unity 游戏常见的窗口类名可能是 'UnityWndClass'，
-# 实际值需要用 Spy++ 工具查看游戏窗口的"类名"属性确认
+# 游戏窗口类名已确认（2026-06-11 用 PowerShell 获取）
+# 游戏引擎: Unreal Engine，类名: 'UnrealWindow'
 # ============================================================
 
 config = {
     'debug': False,
     'use_gui': True,
     'config_folder': 'configs',
-    'gui_icon': None,  # 暂不设置图标
+    'gui_icon': '',  # 暂无自定义图标
     'global_configs': [key_config_option],
     'gui_title': 'Rock Kingdom Auto',  # 窗口标题
     'my_app': ['src.globals', 'Globals'],
@@ -44,12 +43,14 @@ config = {
             'CefBrowserWindow', 'Chrome_RenderWidgetHostHWND', '#32770',
             re.compile('CNativeLoginDlg'), 'Static', 'ComboBox', 'ComboLBox', 'Button'
         ],
-        # TODO: 游戏 exe 文件名，后续补充
-        'exe': 'Game.exe',
-        # Unity 游戏的窗口类名（待确认，先用常见值）
-        # 常见 Unity 类名: 'UnityWndClass', 'UnityGuiWndClass'
-        'hwnd_class': 'UnityWndClass',
-        # 后台输入模式
+        # 已确认: NRC-Win64-Shipping.exe
+        'exe': 'NRC-Win64-Shipping.exe',
+        # Unreal Engine 窗口类名
+        'hwnd_class': 'UnrealWindow',
+        # 输入模式：PostMessage（后台消息，Unreal Engine 不响应）
+        # 注意：游戏使用 ACE 内核反作弊，所有软件模拟输入均被拦截
+        #       SendInput / mouse_event / pynput / PyDirect 均无效
+        #       后续方案：Arduino USB HID 硬件模拟
         'interaction': 'PostMessage',
         # 画面捕获方式：WGC 优先（支持后台/最小化），BitBlt 回退
         'capture_method': ['WGC', 'BitBlt_RenderFull'],

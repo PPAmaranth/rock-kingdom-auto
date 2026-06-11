@@ -6,7 +6,7 @@
 |------|------|
 | **项目名** | rock-kingdom-auto |
 | **目标游戏** | 洛克王国：世界 (Rock Kingdom: World) |
-| **游戏引擎** | Unity |
+| **游戏引擎** | Unreal Engine |
 | **GitHub** | https://github.com/PPAmaranth/rock-kingdom-auto |
 | **本地路径** | `F:\git-project\github\ok-dev\rock-kingdom-auto` |
 | **参考项目** | [ok-wuthering-waves](https://github.com/ok-oldking/ok-wuthering-waves) |
@@ -28,9 +28,9 @@
   - [x] 日志输出（丢球计数、速率、运行时长）
   - [x] 勾选启用/取消停止（TriggerTask 模式）
 - [x] Git 初始化 + GitHub 推送
-- [ ] 待确认：Unity 窗口类名
-- [ ] 待确认：游戏 exe 文件名
-- [ ] 待确认：丢球操作方式（左键/右键、长按/点按）
+- [x] 窗口类名: `UnrealWindow`（Unreal Engine）
+- [x] 游戏 exe 文件名: `NRC-Win64-Shipping.exe`
+- [x] 丢球操作方式：长按左键 ~0.2s 出准星 → 松开即投
 
 ### Phase 2 — 精灵识别 + 视角对准
 
@@ -106,6 +106,29 @@ ok-script BaseTask
 | 2026-06-11 | 使用 PostMessage 后台模式 | 支持窗口最小化/遮挡时继续运行 |
 | 2026-06-11 | 目标分辨率 2560×1440 | 个人使用，不需要多分辨率适配 |
 | 2026-06-11 | 开发目标：个人使用/学习 | 不需要考虑多用户、多语言、分发渠道 |
+| 2026-06-11 | 确认游戏引擎为 Unreal Engine（非 Unity） | PowerShell 脚本确认窗口类名 `UnrealWindow`，进程名 `NRC-Win64-Shipping.exe` |
+| 2026-06-11 | 确认游戏反作弊为 ACE (AntiCheatExpert) | 内核级反作弊，ring0 层拦截所有软件模拟输入 |
+| 2026-06-11 | 12 轮输入方案测试全部失败 | PostMessage / SendInput / mouse_event / keybd_event / pynput / PyDirect / G HUB 均被 ACE 拦截 |
+| 2026-06-11 | 后续方案：Arduino USB HID 硬件模拟 | 软件输入已穷尽，唯一可靠方案是用 Arduino 模拟真实 USB 鼠标
+
+---
+
+## 输入方案测试记录（2026-06-11）
+
+游戏使用 **ACE (AntiCheatExpert)** 内核反作弊，经过 12 轮测试确认：
+
+| 方案 | API 层 | 游戏层 | 结论 |
+|------|:--:|:--:|------|
+| PostMessage / SendMessage | ✅ | ❌ | Unreal Engine 不响应 Windows 消息 |
+| SendInput 鼠标 | ✅ | ❌ | ACE 内核层过滤 |
+| SendInput 键盘扫描码 | ❌ | — | API 直接返回 0，被拦截 |
+| mouse_event / keybd_event | ✅ | ❌ | 旧 API 同样被 hook |
+| pynput / pydirectinput | ✅ | ❌ | 底层仍走 SendInput，被拦 |
+| 批量 SendInput + dwExtraInfo | ✅ | ❌ | 均返回成功但游戏无响应 |
+| G HUB Lua 脚本 | — | — | 当前鼠标不支持 G 系列脚本功能 |
+| Touch Injection API | — | — | 结构复杂且需要触屏硬件 |
+
+**结论**：软件模拟输入已穷尽。唯一可行方案是 **Arduino USB HID 硬件模拟**（Python 串口 → Arduino → USB HID 鼠标事件），游戏完全无法检测。
 
 ---
 

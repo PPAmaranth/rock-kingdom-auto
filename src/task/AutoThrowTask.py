@@ -37,7 +37,7 @@ class AutoThrowTask(BaseRKTask, TriggerTask):
             '_enabled': True,
             'Throw Interval Min (s)': 0.3,
             'Throw Interval Max (s)': 1.0,
-            'Hold Time Min (s)': 0.15,
+            'Hold Time Min (s)': 0.20,
             'Hold Time Max (s)': 0.40,
             'Work Duration Min (min)': 2.0,
             'Work Duration Max (min)': 3.0,
@@ -93,16 +93,20 @@ class AutoThrowTask(BaseRKTask, TriggerTask):
             self._do_throw()
 
     def _do_throw(self):
-        """执行一次丢球操作：长按鼠标左键 → 松开。"""
+        """执行一次丢球操作：长按鼠标左键 → 松开。
+
+        当前使用 ok-script 框架的标准 click() 方法。
+        ⚠️  注意：游戏使用 ACE (AntiCheatExpert) 内核反作弊，
+        所有软件模拟输入（PostMessage/SendInput/pynput）均被拦截。
+        当前实现在游戏中无法生效，需等待硬件方案（Arduino USB HID）。
+        """
         hold_time = self._random_hold_time()
 
-        # 屏幕中央坐标
+        # 屏幕中央坐标（相对坐标 0.0~1.0）
         x = self.width_of_screen(0.5)
         y = self.height_of_screen(0.5)
 
-        self.mouse_down(key='left', x=x, y=y)
-        self.sleep(hold_time)
-        self.mouse_up(key='left')
+        self.click(x=x, y=y, down_time=hold_time)
 
         self.throw_count += 1
         self.total_throws += 1
